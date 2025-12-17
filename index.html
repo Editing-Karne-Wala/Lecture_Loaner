@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Locked MP4 Player</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: black;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: white;
+    }
+
+    video {
+      pointer-events: none;
+    }
+
+    #playerContainer.fullscreen video {
+      width: 100vw !important;
+      height: 100vh !important;
+    }
+
+    #controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    #controls.hidden {
+      display: none;
+    }
+
+    #loadingIndicator {
+      display: none;
+      color: white;
+      margin-top: 10px;
+    }
+
+    video::-webkit-media-controls-timeline {
+      display: none;
+    }
+
+    video::-webkit-media-controls {
+      display: none;
+    }
+
+    #closeButton {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background-color: red;
+      color: white;
+      padding: 10px;
+      cursor: pointer;
+      display: none;
+    }
+
+    #closeButton.visible {
+      display: block;
+    }
+
+    #speedOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 5rem;
+      color: #39ff14;
+      /* Neon Green */
+      font-family: 'Courier New', Courier, monospace;
+      font-weight: bold;
+      text-shadow: 0 0 20px #39ff14;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      z-index: 1000;
+    }
+
+    #speedOverlay.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="controls">
+    <input type="file" id="mp4File" accept=".mp4" />
+    <button onclick="loadMP4()">Load MP4</button>
+  </div>
+  <div id="playerContainer">
+    <div id="player"></div>
+    <div id="loadingIndicator">Loading video...</div>
+    <div id="speedOverlay">1.0x</div>
+  </div>
+  <div id="closeButton" onclick="closeApp()">Close App</div>
+
+  <script>
+    let mp4Player;
+    let hasPlayed = false;
+    let controlsVisible = true;
+    let isMP4Loaded = false;
+    let videoEnded = false;
+    let currentSalt = "LECTURE_LOANER_SALT"; // Default fallback
+
+    window.electronAPI.onInitArgs((args) => {
+      console.log('Received args:', args);
+      if (args.length > 1) {
+        const videoPath = args[1];
+        if (args[2]) {
+          currentSalt = args[2];
+        }
+        loadVideoFromPath(videoPath);
+      }
+    });
+
+    function loadVideoFromPath(path) {
+      // FIX: Robust URL generation (Handles spaces, #, ?, etc.)
+      try {
+        const normalizedPath = path.replace(/\\/g, '/');
+        const urlObj = new URL(`file:///${normalizedPath}`);
+        const url = urlObj.href;
+
+        // DEBUG: Alert to confirm reception
+        // alert(`Trying to load: ${url}`); 
+
+        document.getElementById('player').innerHTML = `<video id="mp4Player" src="${url}"></video>`;
+        initPlayer();
+        // Store path for token generation
+        document.getElementById('mp4File').dataset.path = path;
+      } catch (e) {
+        alert("Error creating video URL: " + e.message);
+      }
+    }
+
+    function initPlayer() {
+      mp4Player = document.getElementById('mp4Player');
+      mp4Player.style.pointerEvents = 'none';
+      showLoadingIndicator();
+      mp4Player.load();
+
+      mp4Player.addEventListener('error', (e) => {
+        const err = mp4Player.error;
+        alert(`Video Error: ${err.code} - ${err.message}`);
+      });
+
+      mp4Player.addEventListener('loadeddata', () => {
+        isMP4Loaded = true;
+        hideLoadingIndicator();
+        mp4Player.play().then(() => hasPlayed = true).catch(() => alert('Play failed'));
+        toggleFullScreen();
+        hideControls();
+      });
+      mp4Player.addEventListener('ended', () => {
+        videoEnded = true;
+        showCloseButton();
+      });
+    }
+
+    function loadMP4() {
+      const fileInput = document.getElementById('mp4File');
+      const file = fileInput.files[0];
+      if (!file || !file.name.endsWith('.mp4')) {
+        alert('Please select a valid .mp4 file');
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      document.getElementById('player').innerHTML = `<video id="mp4Player" src="${url}"></video>`;
+      initPlayer();
+    }
+
+    let speedOverlayTimeout;
+
+    function showSpeedOverlay(speed) {
+      const overlay = document.getElementById('speedOverlay');
+      overlay.innerText = speed.toFixed(2) + 'x';
+      overlay.classList.add('visible');
+
+      clearTimeout(speedOverlayTimeout);
+      speedOverlayTimeout = setTimeout(() => {
+        overlay.classList.remove('visible');
+      }, 500);
+    }
+
+    document.addEventListener('keydown', (e) => {
+      switch (e.key) {
+        case ' ':
+          if (!hasPlayed && mp4Player && isMP4Loaded) {
+            mp4Player.play();
+            hasPlayed = true;
+          }
+          break;
+        case 'ArrowLeft':
+          if (mp4Player && isMP4Loaded) {
+            const currentTime = mp4Player.currentTime;
+            mp4Player.currentTime = Math.max(0, currentTime - 5);
+            mp4Player.play();
+          }
+          break;
+        case 'ArrowRight':
+          // DISABLED: Seeking forward is cheating.
+          break;
+        case '[':
+          if (mp4Player && isMP4Loaded) {
+            const newSpeed = Math.max(0.25, mp4Player.playbackRate - 0.25);
+            mp4Player.playbackRate = newSpeed;
+            showSpeedOverlay(newSpeed);
+          }
+          break;
+        case ']':
+          if (mp4Player && isMP4Loaded) {
+            const newSpeed = Math.min(2.0, mp4Player.playbackRate + 0.25);
+            mp4Player.playbackRate = newSpeed;
+            showSpeedOverlay(newSpeed);
+          }
+          break;
+        case 'Escape':
+          if (videoEnded) {
+            minimizeWindow();
+          }
+          break;
+        case 'f':
+        case 'F':
+          toggleFullScreen();
+          break;
+      }
+    });
+
+    function toggleFullScreen() {
+      const container = document.getElementById('playerContainer');
+      if (!document.fullscreenElement) {
+        container.requestFullscreen().catch(err => {
+          console.error('Fullscreen denied:', err.message);
+        }).then(() => {
+          container.classList.add('fullscreen');
+        });
+      } else {
+        document.exitFullscreen().catch(err => {
+          console.error('Exit fullscreen failed:', err.message);
+        }).then(() => {
+          container.classList.remove('fullscreen');
+        });
+      }
+    }
+
+    function hideControls() {
+      const controls = document.getElementById('controls');
+      controls.classList.add('hidden');
+      controlsVisible = false;
+    }
+
+    function showControls() {
+      const controls = document.getElementById('controls');
+      controls.classList.remove('hidden');
+      controlsVisible = true;
+    }
+
+    function showLoadingIndicator() {
+      document.getElementById('loadingIndicator').style.display = 'block';
+    }
+
+    function hideLoadingIndicator() {
+      document.getElementById('loadingIndicator').style.display = 'none';
+    }
+
+    async function generateToken(fileOrPath) {
+      let pathStr = "";
+      // Note: We are using Path + Salt for hash consistency with DB.
+      // DB uses: file + stats.size + salt.
+      // We don't have size here easily.
+      // Let's assume for now we just use Path + Salt and I will update DB to match.
+
+      if (typeof fileOrPath === 'string') {
+        pathStr = fileOrPath;
+      } else {
+        pathStr = fileOrPath.path;
+      }
+
+      const msg = pathStr + currentSalt;
+      const msgBuffer = new TextEncoder().encode(msg);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      return hashHex.substring(0, 8).toUpperCase();
+    }
+
+    async function showCloseButton() {
+      const fileInput = document.getElementById('mp4File');
+      let token = "";
+
+      if (fileInput.dataset.path) {
+        token = await generateToken(fileInput.dataset.path);
+      } else if (fileInput.files.length > 0) {
+        token = await generateToken(fileInput.files[0]);
+      }
+
+      const closeBtn = document.getElementById('closeButton');
+      // Reverting to clean white design as requested
+      closeBtn.style.background = 'white';
+      closeBtn.style.color = 'black';
+      closeBtn.style.fontFamily = 'Arial, sans-serif';
+      closeBtn.style.display = 'flex';
+      closeBtn.style.flexDirection = 'column';
+      closeBtn.style.justifyContent = 'center';
+      closeBtn.style.alignItems = 'center';
+      closeBtn.style.top = '50%';
+      closeBtn.style.left = '50%';
+      closeBtn.style.transform = 'translate(-50%, -50%)';
+      closeBtn.style.width = '400px';
+      closeBtn.style.height = 'auto';
+      closeBtn.style.borderRadius = '10px';
+      closeBtn.style.boxShadow = '0 0 20px rgba(0,0,0,0.5)';
+
+      closeBtn.innerHTML = `
+        <div style="text-align: center; padding: 20px;">
+            <div style="font-size: 1.2rem; margin-bottom: 10px;">SESSION COMPLETE. YOUR TOKEN:</div>
+            <div style="font-size: 2rem; font-weight: bold; margin: 10px 0; user-select: text;">${token}</div>
+            <div style="font-size: 1rem; margin-bottom: 20px;">Write this down!</div>
+            <button onclick="window.electronAPI.copyToClipboard('${token}')" style="font-size: 1rem; padding: 10px 20px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 5px;">Copy Token</button>
+            <div style="margin-top: 20px; font-size: 0.8rem; color: #666; cursor: pointer;" onclick="closeApp()">(Click here to Close)</div>
+        </div>
+      `;
+      closeBtn.classList.add('visible');
+    }
+
+    function closeApp() {
+      window.electronAPI.sendAllowClose();
+    }
+
+    function minimizeWindow() {
+      window.electronAPI.minimizeWindow();
+    }
+
+    // Initial setup
+    showControls();
+
+    // Request fullscreen on load
+    window.onload = () => {
+      const container = document.getElementById('playerContainer');
+      container.requestFullscreen().then(() => {
+        container.classList.add('fullscreen');
+      });
+    };
+  </script>
+</body>
+
+</html>
